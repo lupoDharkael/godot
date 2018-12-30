@@ -34,6 +34,101 @@
 #include "editor_scale.h"
 #include "editor_settings.h"
 
+// Export
+#include "core/io/json.h"
+#include "core/os/file_access.h"
+
+
+// EditorProfiler::Metric
+
+Dictionary EditorProfiler::Metric::to_dictionary() const {
+	Dictionary res;
+
+	res["valid"] = valid;
+	res["frame_number"] = frame_number;
+	res["frame_time"] = frame_time;
+	res["idle_time"] = idle_time;
+	res["physics_time"] = physics_time;
+	res["physics_frame_time"] = physics_frame_time;
+	Array category_arr;
+	category_arr.resize(categories.size());
+	for (int i = 0; i < categories.size(); i++) {
+		
+		const Category &c = categories[i];
+
+		Dictionary category;
+		category["signature"] = c.signature;
+		category["name"] = c.name;
+		category["total_time"] = c.total_time;
+
+		Array item_arr;
+		item_arr.resize(c.items.size());
+
+		for (int j = 0; j < c.items.size(); j++) {
+			Dictionary item;
+			item["signature"] = c.items[j].signature;
+			item["name"] = c.items[j].name;
+			item["script"] = c.items[j].script;
+			item["line"] = c.items[j].line;
+			item["self"] = c.items[j].self;
+			item["total"] = c.items[j].total;
+			item["calls"] = c.items[j].calls;
+			item_arr[j] = item;
+		}
+		category["items"] = item_arr;
+
+		category_arr[i] = category;
+	}
+	res["categories"] = category_arr;
+
+	return res;
+}
+
+void EditorProfiler::Metric::from_dictionary(const Dictionary &dict) {
+	valid = dict.get("valid", false);
+	if (!valid) {
+		return;
+	}
+	frame_number = dict.get("frame_number", 0);
+	frame_time = dict.get("frame_time", 0);
+	idle_time = dict.get("idle_time", 0);
+	physics_time = dict.get("physics_time", 0);
+	physics_frame_time = dict.get("physics_frame_time", 0);
+	
+	const Array category_arr = dict.get("categories", Array());
+
+	for (int i = 0; i < category_arr.size(); i++) {
+
+		categories.resize(category_arr.size());
+		Dictionary cat_d = category_arr[i];
+		Category category;
+
+		category.signature = cat_d.get("signature", "");
+		category.name = cat_d.get("name", "");
+		category.total_time = cat_d.get("total_time", 0);
+
+		const Array item_arr = cat_d.get("items", Array());
+
+		for (int j = 0; j < item_arr.size(); j++) {
+
+			category.items.resize(item_arr.size());
+			Category::Item item;
+			Dictionary item_d = item_arr[j];
+			item.signature = item_d.get("signature", "");
+			item.name = item_d.get("name", "");
+			item.script = item_d.get("script", "");
+			item.line = item_d.get("line", 0);
+			item.self = item_d.get("self", 0);
+			item.total = item_d.get("total", 0);
+			item.calls = item_d.get("calls", 0);
+			category.items.write[j] = item;
+		}
+		categories.write[i] = category;
+	}
+}
+
+// EditorProfiler
+
 void EditorProfiler::_make_metric_ptrs(Metric &m) {
 
 	for (int i = 0; i < m.categories.size(); i++) {
@@ -438,6 +533,21 @@ void EditorProfiler::_clear_pressed() {
 	_update_plot();
 }
 
+void EditorProfiler::_import_pressed() {
+
+	file_dialog->set_mode(EditorFileDialog::MODE_OPEN_FILE);
+	file_dialog->set_title(TTR("Open Profiling Data"));
+	file_dialog->popup_centered_ratio();
+}
+
+void EditorProfiler::_export_pressed() {
+
+	file_dialog->set_mode(EditorFileDialog::MODE_SAVE_FILE);
+	file_dialog->set_title(TTR("Save Profiling Data As..."));
+	file_dialog->popup_centered_ratio();
+	
+}
+
 void EditorProfiler::_notification(int p_what) {
 
 	if (p_what == NOTIFICATION_ENTER_TREE) {
@@ -472,6 +582,10 @@ void EditorProfiler::_graph_tex_draw() {
 		int cur_x = frame * graph->get_size().x / max_frames;
 
 		graph->draw_line(Vector2(cur_x, 0), Vector2(cur_x, graph->get_size().y), Color(1, 1, 1, 0.4));
+		// Frame time preview
+		String frame_time_val = String::num_real(frame_metrics[hover_metric].frame_time);
+		Ref<Font> frame_time_font = this->get_font("font", "Label");
+		graph->draw_string(frame_time_font, Vector2(cur_x + 2, frame_time_font->get_height()), frame_time_val);
 	}
 }
 
@@ -599,17 +713,134 @@ void EditorProfiler::_combo_changed(int) {
 	_update_plot();
 }
 
+void EditorProfiler::_file_dialog_callback(const String &p_string) {
+
+	if (file_dialog->get_mode() == EditorFileDialog::MODE_OPEN_FILE) { // Import
+
+		Error file_err;
+		FileAccess *file = FileAccess::open(p_string, FileAccess::READ, &file_err);
+
+		if (file_err) {
+			if (file)
+				memdelete(file);
+			return;
+		}
+
+		String imported_json = file->get_line();
+
+		memdelete(file);
+
+		Variant json_data;
+		String err_str;
+		int err_line;
+		Error json_err = JSON::parse(imported_json, json_data, err_str, err_line);
+
+		if (json_err != OK) {
+			_err_print_error("", p_string.utf8().get_data(), err_line, err_str.utf8().get_data(), ERR_HANDLER_SCRIPT);
+			return;
+		}
+		
+		updating_frame = true;
+
+		Dictionary data_dict = json_data;
+		
+		last_metric = data_dict.get("last_metric", -1);
+
+		// clear
+		frame_metrics.clear();
+		variables->clear();
+		plot_sigs.clear();
+		hover_metric = -1;
+		seeking = false;
+		
+		// Import frame_metrics
+		Array metrics_arr = data_dict.get("frame_metrics", Array());
+		if (metrics_arr.size() == 0) {
+			return;
+		}
+
+		frame_metrics.resize(metrics_arr.size());
+
+		for (int i = 0; i < metrics_arr.size(); i++) {
+			Metric metric;
+			Dictionary dict_metric = metrics_arr[i];
+			metric.from_dictionary(dict_metric);
+			_make_metric_ptrs(metric);
+			frame_metrics.write[i] = metric;
+		}
+
+		// Import plot_sigs
+		Array sigs_arr = data_dict.get("plot_sigs", Array());
+
+		for (int i = 0; i < sigs_arr.size(); i++) {
+			StringName sn = sigs_arr[i];
+			plot_sigs.insert(sn);
+		}
+		
+		cursor_metric_edit->set_max(frame_metrics[last_metric].frame_number);
+		cursor_metric_edit->set_min(MAX(frame_metrics[last_metric].frame_number - frame_metrics.size(), 0));
+		cursor_metric_edit->set_value(frame_metrics[0].frame_number);
+		
+		updating_frame = false;
+
+		_update_frame();
+		_update_plot();
+
+	} else if (file_dialog->get_mode() == EditorFileDialog::MODE_SAVE_FILE) { // Export
+
+		Dictionary dict;
+
+		dict["last_metric"] = last_metric;
+		
+		// Export frame_metrics
+		Array metrics_arr;
+		metrics_arr.resize(frame_metrics.size());
+		for (int i = 0; i < frame_metrics.size(); i++) {
+			metrics_arr[i] = frame_metrics[i].to_dictionary();
+		}
+		dict["frame_metrics"] = metrics_arr;
+
+		// Export plot_sigs
+		Array sigs_arr;
+		sigs_arr.resize(plot_sigs.size());
+		int sigs_index = 0;
+		for (Set<StringName>::Element *E = plot_sigs.front(); E; E = E->next()) {
+			sigs_arr[sigs_index++] = E->get();
+		}
+		dict["plot_sigs"] = sigs_arr;
+		
+		const String json_data = JSON::print(dict);
+
+		Error err;
+		FileAccess *file = FileAccess::open(p_string, FileAccess::WRITE, &err);
+
+		if (err) {
+			if (file)
+				memdelete(file);
+			return;
+		}
+
+		file->store_string(json_data);
+
+		memdelete(file);
+	}
+}
+
 void EditorProfiler::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("_update_frame"), &EditorProfiler::_update_frame);
 	ClassDB::bind_method(D_METHOD("_update_plot"), &EditorProfiler::_update_plot);
 	ClassDB::bind_method(D_METHOD("_activate_pressed"), &EditorProfiler::_activate_pressed);
 	ClassDB::bind_method(D_METHOD("_clear_pressed"), &EditorProfiler::_clear_pressed);
+	ClassDB::bind_method(D_METHOD("_import_pressed"), &EditorProfiler::_import_pressed);
+	ClassDB::bind_method(D_METHOD("_export_pressed"), &EditorProfiler::_export_pressed);
 	ClassDB::bind_method(D_METHOD("_graph_tex_draw"), &EditorProfiler::_graph_tex_draw);
 	ClassDB::bind_method(D_METHOD("_graph_tex_input"), &EditorProfiler::_graph_tex_input);
 	ClassDB::bind_method(D_METHOD("_graph_tex_mouse_exit"), &EditorProfiler::_graph_tex_mouse_exit);
 	ClassDB::bind_method(D_METHOD("_cursor_metric_changed"), &EditorProfiler::_cursor_metric_changed);
 	ClassDB::bind_method(D_METHOD("_combo_changed"), &EditorProfiler::_combo_changed);
+
+	ClassDB::bind_method("_file_dialog_callback", &EditorProfiler::_file_dialog_callback);
 
 	ClassDB::bind_method(D_METHOD("_item_edited"), &EditorProfiler::_item_edited);
 	ADD_SIGNAL(MethodInfo("enable_profiling", PropertyInfo(Variant::BOOL, "enable")));
@@ -627,6 +858,11 @@ bool EditorProfiler::is_profiling() {
 
 EditorProfiler::EditorProfiler() {
 
+	file_dialog = memnew(EditorFileDialog);
+	file_dialog->set_access(EditorFileDialog::ACCESS_FILESYSTEM);
+	file_dialog->connect("file_selected", this, "_file_dialog_callback");
+	add_child(file_dialog);
+
 	HBoxContainer *hb = memnew(HBoxContainer);
 	add_child(hb);
 	activate = memnew(Button);
@@ -639,6 +875,16 @@ EditorProfiler::EditorProfiler() {
 	clear_button->set_text(TTR("Clear"));
 	clear_button->connect("pressed", this, "_clear_pressed");
 	hb->add_child(clear_button);
+
+	import_button = memnew(Button);
+	import_button->set_text(TTR("Import"));
+	import_button->connect("pressed", this, "_import_pressed");
+	hb->add_child(import_button);
+
+	export_button = memnew(Button);
+	export_button->set_text(TTR("Export"));
+	export_button->connect("pressed", this, "_export_pressed");
+	hb->add_child(export_button);
 
 	hb->add_child(memnew(Label(TTR("Measure:"))));
 

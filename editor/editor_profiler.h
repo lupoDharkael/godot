@@ -39,6 +39,7 @@
 #include "scene/gui/split_container.h"
 #include "scene/gui/texture_rect.h"
 #include "scene/gui/tree.h"
+#include "editor/editor_file_dialog.h"
 
 class EditorProfiler : public VBoxContainer {
 
@@ -84,6 +85,9 @@ public:
 			valid = false;
 			frame_number = 0;
 		}
+
+		Dictionary to_dictionary() const;
+		void from_dictionary(const Dictionary &dict);
 	};
 
 	enum DisplayMode {
@@ -101,6 +105,9 @@ public:
 private:
 	Button *activate;
 	Button *clear_button;
+	Button *import_button;
+	Button *export_button;
+	EditorFileDialog *file_dialog;
 	TextureRect *graph;
 	Ref<ImageTexture> graph_texture;
 	PoolVector<uint8_t> graph_image;
@@ -136,6 +143,9 @@ private:
 	void _activate_pressed();
 	void _clear_pressed();
 
+	void _import_pressed();
+	void _export_pressed();
+
 	String _get_time_as_text(const Metric &m, float p_time, int p_calls);
 
 	void _make_metric_ptrs(Metric &m);
@@ -155,6 +165,8 @@ private:
 	void _cursor_metric_changed(double);
 
 	void _combo_changed(int);
+
+	void _file_dialog_callback(const String &p_string);
 
 protected:
 	void _notification(int p_what);
