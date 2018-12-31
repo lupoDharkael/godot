@@ -53,7 +53,7 @@ Dictionary EditorProfiler::Metric::to_dictionary() const {
 	Array category_arr;
 	category_arr.resize(categories.size());
 	for (int i = 0; i < categories.size(); i++) {
-		
+
 		const Category &c = categories[i];
 
 		Dictionary category;
@@ -94,7 +94,7 @@ void EditorProfiler::Metric::from_dictionary(const Dictionary &dict) {
 	idle_time = dict.get("idle_time", 0);
 	physics_time = dict.get("physics_time", 0);
 	physics_frame_time = dict.get("physics_frame_time", 0);
-	
+
 	const Array category_arr = dict.get("categories", Array());
 
 	for (int i = 0; i < category_arr.size(); i++) {
@@ -154,10 +154,10 @@ void EditorProfiler::add_frame_metric(const Metric &p_metric, bool p_final) {
 
 	if (!seeking) {
 		cursor_metric_edit->set_value(frame_metrics[last_metric].frame_number);
-		if (hover_metric != -1) {
-			hover_metric++;
-			if (hover_metric >= frame_metrics.size()) {
-				hover_metric = 0;
+		if (hover_metric.x != -1) {
+			hover_metric.x++;
+			if (hover_metric.x >= frame_metrics.size()) {
+				hover_metric.x = 0;
 			}
 		}
 	}
@@ -193,7 +193,7 @@ void EditorProfiler::clear() {
 	cursor_metric_edit->set_max(0);
 	cursor_metric_edit->set_value(0);
 	updating_frame = false;
-	hover_metric = -1;
+	hover_metric.x = -1;
 	seeking = false;
 }
 
@@ -545,7 +545,7 @@ void EditorProfiler::_export_pressed() {
 	file_dialog->set_mode(EditorFileDialog::MODE_SAVE_FILE);
 	file_dialog->set_title(TTR("Save Profiling Data As..."));
 	file_dialog->popup_centered_ratio();
-	
+
 }
 
 void EditorProfiler::_notification(int p_what) {
@@ -572,26 +572,53 @@ void EditorProfiler::_graph_tex_draw() {
 		graph->draw_line(Vector2(cur_x, 0), Vector2(cur_x, graph->get_size().y), Color(1, 1, 1, 0.8));
 	}
 
-	if (hover_metric != -1 && frame_metrics[hover_metric].valid) {
+	const Metric &metric = frame_metrics[hover_metric.x];
+	if (hover_metric.x != -1 && metric.valid) {
 
 		int max_frames = frame_metrics.size();
-		int frame = frame_metrics[hover_metric].frame_number - (frame_metrics[last_metric].frame_number - max_frames + 1);
+		int frame = metric.frame_number - (frame_metrics[last_metric].frame_number - max_frames + 1);
 		if (frame < 0)
 			frame = 0;
 
 		int cur_x = frame * graph->get_size().x / max_frames;
 
 		graph->draw_line(Vector2(cur_x, 0), Vector2(cur_x, graph->get_size().y), Color(1, 1, 1, 0.4));
+		
 		// Frame time preview
-		String frame_time_val = String::num_real(frame_metrics[hover_metric].frame_time);
-		Ref<Font> frame_time_font = this->get_font("font", "Label");
-		graph->draw_string(frame_time_font, Vector2(cur_x + 2, frame_time_font->get_height()), frame_time_val);
+		StringName closest_signature;
+		float value = -1;
+		// convert metric value to graph height
+		float conv_factor = graph->get_size().height / graph_height;
+
+		for (int i = 0; i < metric.categories.size(); i++) {
+
+			if (plot_sigs.has(metric.categories[i].signature)) {
+				metric.categories[i].total_time;
+			}
+
+			for (int j = 0; j < metric.categories[i].items.size(); j++) {
+				const Metric::Category::Item &it = metric.categories[i].items[j];
+
+				if (plot_sigs.has(it.signature)) {
+					it.total;
+				}
+			}
+		}
+
+		if (value != -1) {
+			
+			// _get_color_from_signature(it.signature)
+			Ref<Font> frame_time_font = this->get_font("font", "Label");
+			graph->draw_string(frame_time_font,
+				Vector2(cur_x + 2, frame_time_font->get_height()),
+				String::num_real(value));
+		}
 	}
 }
 
 void EditorProfiler::_graph_tex_mouse_exit() {
 
-	hover_metric = -1;
+	hover_metric.x = -1;
 	graph->update();
 }
 
@@ -637,10 +664,10 @@ void EditorProfiler::_graph_tex_input(const Ref<InputEvent> &p_ev) {
 
 		if (show_hover) {
 
-			hover_metric = metric;
+			hover_metric = Vector2i(metric, me->get_position().y); // TODO
 
 		} else {
-			hover_metric = -1;
+			hover_metric.x = -1;
 		}
 
 		if (mb.is_valid() || mm->get_button_mask() & BUTTON_MASK_LEFT) {
@@ -750,7 +777,7 @@ void EditorProfiler::_file_dialog_callback(const String &p_string) {
 		frame_metrics.clear();
 		variables->clear();
 		plot_sigs.clear();
-		hover_metric = -1;
+		hover_metric.x = -1;
 		seeking = false;
 		
 		// Import frame_metrics
@@ -954,7 +981,7 @@ EditorProfiler::EditorProfiler() {
 	frame_metrics.resize(metric_size);
 	last_metric = -1;
 	//cursor_metric=-1;
-	hover_metric = -1;
+	hover_metric.x = -1;
 
 	EDITOR_DEF("debugger/profiler_frame_max_functions", 64);
 
